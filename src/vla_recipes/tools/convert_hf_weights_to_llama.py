@@ -61,4 +61,106 @@ def write_model(model_path, model_size, output_base_path):
                 tensor[i].clone() if isinstance(tensor, list) else tensor
             )
     
+    def insert_chunk(name: str, tensor: torch.Tensor, dim: int):
+        tensor = tensor.chunk(num_shards, dim=dim)
+        for i, tensor in enumerate(tensor):
+            state_dict[i][name] = tensor.clone()
+    
+    concat_dim = 0 if llama_version == 3 else 1
+    insert_chunk(
+        "tok_embeddings.weight", loaded["model.embed_tokens.weight"], concat_dim
+    )
+    insert("norm.weight", loaded["model.norm.weight"])
+    insert_chunk("output.weight", loaded["lm_head.weight"], 0)
 
+    for layer_i in tqdm(range(n_layers), desc="Converting layers"):
+
+        ts = (
+            permute(loaded[f"model.layers.{layer_i}.self_attn.q_proj.weight"])
+            .view(n_heads_per_shard * num_shards, dims_per_head, dim)
+            .chunk(num_shards, dim=0)
+        )
+        insert(f"layer.{layer_i}.attention.wq.weight", [t.view(-1, dim) for t in ts])
+
+        ts = (
+            permute(
+                loaded[f"model.layers.{layer_i}.self_attn.k_proj.weight"],
+                num_key_value_heads,
+                key_value_dim,
+                dim,
+            )
+            .view(num_local_key_value_heads * num_shards, dims_per_head, dim)
+            .chunk(num_shards, dim=0)
+        )
+        insert(f"layers.{layer_i}.attention.wk.weight", [t.view(-1, dim) for t in ts])
+
+        ts = (
+            loaded[f"model.layers.{layer_i}.self_attn.v_proj.weight"]
+            .view(num_local_key_value_heads * num_shards, dims_per_head, dim)
+            .chunk(num_shards, dim=0)
+        )
+        insert(f"layers.{layer_i}.attention.wv.weight", [t.view(-1, dim) for t in ts])
+
+        insert_chunk(
+            f"layers.{layer_i}.attention.wo.weight",
+            loaded[f"model.layers.{layer_i}.self_attn.o_proj.weight"],
+            1,
+        )
+
+        insert_chunk(
+            f"layers.{layer_i}.feed_forward.w1.weight",
+            loaded[f"model.layers.{layer_i}.mlp.gate_proj.weight"],
+            0,
+        )
+
+        insert_chunk(
+            f"layers.{layer_i}.feed_forward.w2.weight",
+            loaded[f"model.layers.{layer_i}.mlp.down_proj.weight"],
+            1,
+        )
+
+        insert_chunk(
+            f"layers.{layer_i}.feed_forward.w3.weight",
+            loaded[f"model.layers.{layer_i}.mlp.up_proj.weight"],
+            0,
+        )
+
+        insert(
+            f"layers.{layer_i}.attention_norm.weight",
+            loaded[f"model.layers.{layer_i}.input_layernorm.weight"],
+        )
+        insert(
+            f"layers.{layer_i}.ffn_norm.weight",
+            loaded[f"model.layers.{layer_i}.post_attention_layernorm.weight"],
+        )
+    if llama_version != 3:
+        base = 10000.0
+        inv_freq = (
+            1.0 / (base ** (torch.arange(0, dims_per_head, 2).float() / dims_per_head))
+        ).to(dtype)
+        insert("rope.freqs", inv_freq)
+
+    for i in tqdm(range(num_shards), desc="Saving checkpoint shards"):
+        torch.save(
+            state_dict[i], os.path.join(output_base_path, f"consolidated.{i:02d}.pth")
+        )
+
+def main(
+    model_path: str,
+    model_size: str,
+    output_dir: str,
+):
+    """허깅페이스 형식의 Llama 가중치를 통합 형식으로 변환.
+    params:
+    model_path: 모델 이름 또는 모델 디렉토리 경로.
+    model_size: Llama 모델 크기, 7B, 13B, 34B, 30B, 65B, 70B 중 하나.
+    output_dir: Llama 가중치를 저장할 디렉토리, params.json을 포함해야 함.
+    """
+    assert model_size in NUM_SHARDS, f"Unkown model size {model_size}"
+    params_path = os.path.join(output_dir, "params.json")
+    assert os.path.isfile(params_path, f"{params_path} does not exist")
+
+    write_model(model_path, model_size, output_dir)
+
+if __name__ == "__main__":
+    fire.Fire(main)
