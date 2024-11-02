@@ -8,12 +8,15 @@ import tqdm
 
 
 def main() -> None:
-    "Compare two llama checkpoint directories"
+    """Compare two llama checkpoint directories"""
+
     one_files = sorted(glob.glob(os.path.join(sys.argv[1], "consolidated.*.pth")))
     two_files = sorted(glob.glob(os.path.join(sys.argv[2], "consolidated.*.pth")))
     assert len(one_files) == len(
         two_files
-    ), f"One diretory has {len(one_files)} files while another has {len(two_files)} files"
+    ), "One directory has {} files while another has {} files.".format(
+        len(one_files), len(two_files)
+    )
 
     deltas = []
     for i in tqdm.trange(len(one_files), desc="Comparing shards"):
