@@ -272,14 +272,83 @@ def main(**kwargs):
             sync_module_states=train_config.low_cpu_fsdp,
             param_init_fn=(
                 (
-                    # 파라미터와 버퍼를 지정된 장치로 이동시키되, 저장소(Storage)를 복사하지 않음.
                     lambda module: module.to_empty(
                         device=torch.device("cuda"), recurse=False
                     )
                 )
-            )
-            if train_config.low_cpu_fsdp and rank != 0
-            else None
-        ),
+                # 파라미터와 버퍼를 지정된 장치로 이동시키되, 저장소(Storage)를 복사하지 않음.
+                if train_config.low_cpu_fsdp and rank != 0
+                else None
+            ),
+        )
+        if fsdp_config.fsdp_activation_checkpointing:
+            model.enable_input_requre_grads()
+            model.gradient_checkpointing_enable()
+            apply_fsdp_checkpointing(model)
+    elif not train_config.quantization and not train_config.enable_fsdp:
+        if is_xpu_available():
+            model.to("xpu:0")
+        elif torch.cuda.is_available():
+            model.to("cuda")
+    dataset_config = generate_dataset_config(train_config, kwargs)
+    if is_vision:
+        dataset_processer = processor
+    else:
+        dataset_processer = tokenizer
+    
+    # Load and preprocess the dataset for training and validation
+    dataset_train = get_preprocessed_dataset(
+        dataset_processer,
+        dataset_config,
+        split="train"
+    )
+    if not train_config.enable_fsdp or rank == 0:
+        print(f"--> Training Set Length = {len(dataset_train)}")
+    
+    dataset_val = get_preprocessed_dataset(
+        dataset_processer,
+        dataset_config,
+        split="test"
+    )
+    if not train_config.enable_fsdp or rank == 0:
+        print(f"--> Validation Set Length = {len(dataset_val)}")
 
-# 파라미터와 버퍼를 지정된 장치로 이동시키되, 저장소(Storage)를 복사하지 않음.
+    if train_config.batching_strategy == "packing":
+        if is_vision:
+            raise ValueError("Packing is not supported for vision datasets")
+        else:
+            dataset_train = ConcatDataset(
+                dataset_train, chunk_size=train_config.context_length
+            )
+    
+    train_dl_kwargs = get_dataloader_kwargs(
+        train_config, dataset_train, dataset_processer, "train"
+    )
+    print("length of dataset_train", len(dataset_train))
+    custom_data_collator = get_custom_data_collator(dataset_processer, dataset_config)
+    if custom_data_collator:
+        print("custom_data_collator is used")
+        train_dl_kwargs["collate_fn"] = custom_data_collator
+    # Create DataLoaders for the training and validation dataset
+    train_dataloader = torch.utils.data.DataLoader(
+        dataset_train,
+        num_workers=train_config.num_workers_dataloader,
+        pin_memory=True,
+        **train_dl_kwargs,
+    )
+    print(f"--> Num of Training Set Batches loaded = {len(train_dataloader)}")
+
+    eval_dataloader = None
+    if train_config.run_validation:
+        if train_config.batching_strategy == "packing":
+            if is_vision:
+                raise ValueError("Packing is not supported for vision datasets")
+            else:
+                dataset_val = ConcatDataset(
+                    dataset_val, chunk_size=train_config.context_length
+                )
+        val_dl_kwargs = get_dataloader_kwargs(
+            train_config, dataset_val, dataset_processer, "val"
+        )
+        if custom_data_collator:
+            val_dl_kwargs["collate_fn"] = 
