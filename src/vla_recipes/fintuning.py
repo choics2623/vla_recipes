@@ -351,4 +351,58 @@ def main(**kwargs):
             train_config, dataset_val, dataset_processer, "val"
         )
         if custom_data_collator:
-            val_dl_kwargs["collate_fn"] = 
+            val_dl_kwargs["collate_fn"] = custom_data_collator
+        
+        eval_dataloader = torch.utils.data.DataLoader(
+            dataset_val,
+            num_workers=train_config.num_workers_dataloader,
+            pin_memory=True,
+            **val_dl_kwargs,
+        )
+        print(f"--> Num of Validation Set Batches loaded = {len(eval_dataloader)}")
+        if len(eval_dataloader) == 0:
+            raise ValueError(
+                f"The eval set size is too small for dataloader to load even on batch. Please increase the size of eval set. ({len(eval_dataloader)=})"
+            )
+        else:
+            print(f"--> Num of Validation Set Batches loaded = {len(eval_dataloader)}")
+        
+        # Initializa the optimizer and learning rate schedular
+        if fsdp_config.pure_bf16 and fsdp_config.optimizer == "anyprecision":
+            optimizer = AnyPrecisionAdamW(
+                model.parameters(),
+                lr=train_config.lr,
+                momentum_dtype=torch.bfloat16,
+                variance_dtype=torch.bfloat16,
+                use_kahan_summation=False,
+                weight_decay=train_config.weight_decay,
+            )
+        else:
+            optimizer = optim.AdamW(
+                model.parameters(),
+                lr=train_config.lr,
+                weight_decay=train_config.weight_decay
+            )
+        scheduler = StepLR(optimizer, step_size=1, gamma=train_config.gamma)
+        results = train(
+            model,
+            train_dataloader,
+            eval_dataloader,
+            tokenizer,
+            optimizer,
+            scheduler,
+            train_config.gradient_accumulation_steps,
+            train_config,
+            fsdp_config if train_config.enable_fsdp else None,
+            local_rank if train_config.enable_fsdp else None,
+            rank if train_config.enable_fsdp else None,
+            wandb_run,
+        )
+        if not train_config.enable_fsdp or rank == 0:
+            [print(f"Key: {k}, Value: {v}") for k, v in results.items()]
+            if train_config.use_wandb:
+                for k, v in results.items():
+                    wandb_run.summary[k] = v
+
+if __name__ == "__main__":
+    fire.Fire(main)
