@@ -1,5 +1,5 @@
 import copy
-from datasets import load_datasets
+from datasets import load_dataset
 import itertools
 import torch
 
@@ -18,7 +18,7 @@ def replace_target(target, seq):
 
 def tokenize_dialogs(dialogs, images, processor):
     text_prompt = processor.apply_chat_template(dialogs)
-    batch = processor(images=images, text=text_prompt, padding = True, return_tensor="pt")
+    batch = processor(images=images, text=text_prompt, padding = True, return_tensors="pt")
     label_list = []
     for i in range(len(batch["input_ids"])):
         dialog_tokens = batch["input_ids"][i].tolist()
@@ -45,3 +45,44 @@ def tokenize_dialogs(dialogs, images, processor):
         label_list.append(labels)
     batch["labels"] = torch.tensor(label_list)
     return batch
+
+def get_custom_dataset(dataset_conifg, processor, split, split_ratio=0.9):
+    # load_dataset will return DatasetDict that contains all the data in the train set
+    dataset_dict = load_dataset("HuggingFaceM4/the_cauldron", name="ocrvqa")
+    dataset = dataset_dict['train']
+    # Comment out the following line to use the full dataset, for quick testing only use 2000 samples
+    dataset = dataset.select(range(2000))
+    dataset = dataset.train_test_split(test_size=1-split_ratio, shuffle=True, seed=42)[split]
+    return dataset
+
+class OCRVQADataCollator:
+    def __init__(self, processor):
+        self.processor = processor
+        self.processor.tokenizer.padding_side = "right" # during training, one always uses padding on the right
+    def __call__(self, samples):
+        dialogs, images = [],[]
+        for sample in samples:
+            image_list, sample_list = sample["images"], sample["texts"]
+            if len(image_list) > 1:
+                raise ValueError("Only support one image per sample")
+            image = image_list[0].convert("RGB") # only use the first image
+            dialog = []
+            for sample_dict in sample_list:
+                if not dialog:
+                    # only append image to the first sentence
+                    dialog += [
+                    {"role":"user","content":[{"type": "image"},{"type": "text", "text": sample_dict["user"].strip()}]},
+                    {"role":"assistant","content":[{"type": "text", "text": sample_dict["assistant"].strip()}]}
+                ]
+                
+                else:
+                    dialog += [
+                    {"role":"user","content":[{"type": "text", "text": sample_dict["user"].strip()}]},
+                    {"role":"assistant","content":[{"type": "text", "text": sample_dict["assistant"].strip()}]}
+                ]
+            dialogs.append(dialog)
+            images.append([image])
+        return tokenize_dialogs(dialogs, images,  self.processor)
+
+def get_data_collator(processor):
+    return OCRVQADataCollator(processor)
