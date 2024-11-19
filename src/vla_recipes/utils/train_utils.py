@@ -122,16 +122,16 @@ def train(model, train_dataloader, eval_dataloader, tokenizer, optimizer, lr_sch
     for epoch in range(train_config.num_epochs):
         print(f"Starting epoch {epoch}/{train_config.num_epochs}")
         print(f"train_config.max_train_step: {train_config.max_train_step}")
-        # stop whe the maximum number of training steps is reached
+        # stop when the maximum number of training steps is reached
         if max_steps_reached:
             break
         epoch_start_time = time.perf_counter()
-        with MemoryTrace() as memtrace: # track the memory usage
+        with MemoryTrace() as memtrace:  # track the memory usage
             model.train()
             total_loss = 0.0
-            total_length = len(train_dataloader) // gradient_accumulation_steps
+            total_length = len(train_dataloader)//gradient_accumulation_steps
             pbar = tqdm(colour="blue", desc=f"Training Epoch: {epoch+1}", total=total_length, dynamic_ncols=True)
-            with profile(train_config, local_rank) as profile_context:
+            with profile(train_config,local_rank) as profile_context:
                 for step, batch in enumerate(train_dataloader):
                     total_train_steps += 1
                     # stop when the maximum number of training steps is reached
@@ -158,51 +158,48 @@ def train(model, train_dataloader, eval_dataloader, tokenizer, optimizer, lr_sch
                     if train_config.save_metrics:
                         train_step_loss.append(loss.detach().float().item())
                         train_step_perplexity.append(float(torch.exp(loss.detach().float())))
-                        # train_step_perplexity.append(torch.exp(loss.detach().float())) # 변경
                     if train_config.use_fp16:
                         # if fp16 is enabled, use gradient scaler to handle gradient update
                         scaler.scale(loss).backward()
-                    if (step + 1) % gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
-                        if train_config.gradient_clipping and train_config.gradient_clipping_threshold > 0.0:
-                            scaler.unscale_(optimizer)
-                            if train_config.enable_fsdp:
-                                model.clip_grad_norm_(train_config.gradient_clipping_threshold)
-                            else:
-                                torch.nn.utils.clip_grad_norm_(model.parameters(), train_config.gradient_clipping_threshold)
-                        optimizer.step(optimizer)
-                        scaler.update()
-                        optimizer.zero_grad()
-                        pbar.update(1)
-                    else:
-                        # regular backpropagation when fp16 is not used
-                        loss.backward()
                         if (step + 1) % gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
                             if train_config.gradient_clipping and train_config.gradient_clipping_threshold > 0.0:
+                                scaler.unscale_(optimizer)
                                 if train_config.enable_fsdp:
-                                    # gradient explosion문제를 방지하기 위해 사용
-                                    model.clip_grad_norm_(model.parameters(), train_config.gradient_clipping_threshold)
+                                    model.clip_grad_norm_(train_config.gradient_clipping_threshold)
                                 else:
                                     torch.nn.utils.clip_grad_norm_(model.parameters(), train_config.gradient_clipping_threshold)
                             scaler.step(optimizer)
                             scaler.update()
                             optimizer.zero_grad()
                             pbar.update(1)
-                if train_config.use_profiler or train_config.flop_counter:
-                    profile_context.step()
-                if train_config.flop_counter and profile_context.is_done():
-                    TFlops = profile_context.get_flops_per_sec() / 1e12
-                if wandb_run:
-                    if not train_config.enable_fsdp or rank == 0:
-                        wandb_run.log({
-                            'train/epoch': epoch + 1,
-                            'train/step': epoch * len(train_dataloader) + step,
-                            'train/loss': loss.detach().float(),
-                        })
-                        
-                pbar.set_description(f"Training Epoch: {epoch+1}/{train_config.num_epochs}, step {step}/{len(train_dataloader)} completed (loss: {loss.detach().float()})")
-                
-                if train_config.save_metrics:
-                    save_to_json(metrics_filename, train_step_loss, train_loss, train_step_perplexity, train_prep, val_step_loss, val_loss, val_step_perplexity, val_prep)
+                    else:
+                        # regular backpropagation when fp16 is not used
+                        loss.backward()
+                        if (step + 1) % gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
+                            if train_config.gradient_clipping and train_config.gradient_clipping_threshold > 0.0:
+                                if train_config.enable_fsdp:
+                                    model.clip_grad_norm_(train_config.gradient_clipping_threshold)
+                                else:
+                                    torch.nn.utils.clip_grad_norm_(model.parameters(), train_config.gradient_clipping_threshold)
+                            optimizer.step()
+                            optimizer.zero_grad()
+                            pbar.update(1)
+                    if train_config.use_profiler or train_config.flop_counter:
+                        profile_context.step()
+                    if train_config.flop_counter and profile_context.is_done():
+                        TFlops = profile_context.get_flops_per_sec() / 1e12
+                    if wandb_run:
+                        if not train_config.enable_fsdp or rank==0:
+                            wandb_run.log({
+                                'train/epoch': epoch + 1,
+                                'train/step': epoch * len(train_dataloader) + step,
+                                'train/loss': loss.detach().float(),
+                            })
+
+                    pbar.set_description(f"Training Epoch: {epoch+1}/{train_config.num_epochs}, step {step}/{len(train_dataloader)} completed (loss: {loss.detach().float()})")
+
+                    if train_config.save_metrics:
+                        save_to_json(metrics_filename, train_step_loss, train_loss, train_step_perplexity, train_prep, val_step_loss, val_loss, val_step_perplexity, val_prep)
                 pbar.close()
         
         epoch_end_time = time.perf_counter()-epoch_start_time

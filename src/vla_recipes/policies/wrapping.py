@@ -22,7 +22,7 @@ def get_llama_wrapper():
     """
     # === use new transformer wrapper
 
-    llama_auto_wrap_policy = function.partial(
+    llama_auto_wrap_policy = functools.partial(
         transformer_auto_wrap_policy,
         transformer_layer_cls=set([LlamaDecoderLayer, MllamaSelfAttentionDecoderLayer, MllamaVisionEncoderLayer, MllamaCrossAttentionDecoderLayer])
     )

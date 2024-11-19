@@ -19,12 +19,12 @@ class MemoryTrace:
         gc.collect()
         if is_xpu_available():
             torch.xpu.empty_cache()
-            torch.xpu.reset_max_memory_allocated() # 확인해 봐야 함.
-            self.begin = byte2gb(torch.xpu.memory_allocated)
+            torch.xpu.reset_max_memory_allocated()   # reset the peak gauge to zero
+            self.begin = byte2gb(torch.xpu.memory_allocated())
         elif torch.cuda.is_available():
             torch.cuda.empty_cache()
-            torch.cuda.reset_max_memory_allocated()
-            self.begin = byte2gb(torch.cuda.memory_allocated)
+            torch.cuda.reset_max_memory_allocated()  # reset the peak gauge to zero
+            self.begin = byte2gb(torch.cuda.memory_allocated())
         self.process = psutil.Process()
         self.cpu_begin = byte2gb(self.cpu_mem_used())
         self.peak_monitoring = True
@@ -32,23 +32,23 @@ class MemoryTrace:
         peak_monitor_thread.daemon = True
         peak_monitor_thread.start()
         return self
-    
+
     def cpu_mem_used(self):
-        """현재 프로세스의 실제 메모리"""
+        """현제 프로세스의 실제 메모리"""
         return self.process.memory_info().rss
-    
-    
+
     def peak_monitor_func(self):
         self.cpu_peak = -1
-        
+
         while True:
             self.cpu_peak = max(self.cpu_mem_used(), self.cpu_peak)
+
             # can't sleep or will not catch the peak right (this comment is here on purpose)
             # time.sleep(0.001) # 1msec
-            
+
             if not self.peak_monitoring:
                 break
-            
+
     def __exit__(self, *exc):
         self.peak_monitoring = False
 

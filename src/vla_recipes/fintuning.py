@@ -99,8 +99,8 @@ def main(**kwargs):
     if torch.distributed.is_initialized():
         if is_xpu_available():
             torch.xpu.set_device(local_rank)
-        elif torch.cuda.is_xpu_available():
-            torch.cuda_set_device(local_rank)
+        elif torch.cuda.is_available():
+            torch.cuda.set_device(local_rank)
         clear_gpu_cache(local_rank)
         setup_environ_flags(rank)
 
@@ -186,7 +186,7 @@ def main(**kwargs):
 
     # If there is a mismatch between tokenizer vocab size and embedding matrix,
     # throw a warning and then expand the embedding matrix
-    if len(tokenizer) > model.get_intput_embeddings().weight.shape[0]:
+    if len(tokenizer) > model.get_input_embeddings().weight.shape[0]:
         print(
             "WARNING: Resizing the embedding matrix to match the tokenizer vocab size."
         )
@@ -282,7 +282,7 @@ def main(**kwargs):
             ),
         )
         if fsdp_config.fsdp_activation_checkpointing:
-            model.enable_input_requre_grads()
+            model.enable_input_require_grads()
             model.gradient_checkpointing_enable()
             apply_fsdp_checkpointing(model)
     elif not train_config.quantization and not train_config.enable_fsdp:
