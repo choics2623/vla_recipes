@@ -44,6 +44,10 @@ def tokenize_dialogs(dialogs, images, processor):
                 labels[i] = -100
         label_list.append(labels)
     batch["labels"] = torch.tensor(label_list)
+    #  # dtype 일, 여기 수정 확인 필요
+    # for k, v in batch.items():
+    #     if v.dtype in [torch.float32, torch.float16, torch.bfloat16]:
+    #         batch[k] = v.to(torch.bfloat16)
     return batch
 
 def get_custom_dataset(dataset_conifg, processor, split, split_ratio=0.9):
