@@ -7,22 +7,22 @@ def fsdp_auto_wrap_policy(model, transformer_layer_names):
     from torch.distributed.fsdp.wrap import _or_policy, lambda_auto_wrap_policy, transformer_auto_wrap_policy
 
     def lambda_policy_fn(module):
-        if(
+        if (
             len(list(module.named_children())) == 0
             and getattr(module, "weight", None) is not None
             and module.weight.requires_grad
         ):
             return True
         return False
-    
+
     lambda_policy = functools.partial(lambda_auto_wrap_policy, lambda_fn=lambda_policy_fn)
     transformer_wrap_policy = functools.partial(
         transformer_auto_wrap_policy,
-        transformer_layer_cls=(transformer_layer_names)
+        transformer_layer_cls=set(transformer_layer_names)
     )
 
-    auto_warp_policy = functools.partial(_or_policy, policies=[lambda_policy, transformer_wrap_policy])
-    return auto_warp_policy
+    auto_wrap_policy = functools.partial(_or_policy, policies=[lambda_policy, transformer_wrap_policy])
+    return auto_wrap_policy
 
 # 
 def hsdp_device_mesh(replica_group_size, sharding_group_size, device=None):
@@ -51,8 +51,8 @@ def hsdp_device_mesh(replica_group_size, sharding_group_size, device=None):
     """
 
     if replica_group_size is None or sharding_group_size is None:
-        raise ValueError("Both replica_group_size and sharding_group_size must be provided")
-    
+        raise ValueError("Both replica_group_size and sharding_group_size must be provided.")
+
     local_rank = int(os.getenv("LOCAL_RANK", "0"))
     world_size = int(os.getenv("WORLD_SIZE", "1"))
 
@@ -61,13 +61,13 @@ def hsdp_device_mesh(replica_group_size, sharding_group_size, device=None):
     if world_size % sharding_group_size != 0:
         raise ValueError(f"World size {world_size} is not evenly divisible by "
                          f"sharding group size {sharding_group_size}.")
-    
+
     if (world_size // sharding_group_size) % replica_group_size != 0:
         raise ValueError(f"The calculated number of replica groups is not evenly divisible by "
                          f"replica_group_size {replica_group_size}.")
-    
+
     device_mesh = init_device_mesh(device, (replica_group_size, sharding_group_size))
     if device_mesh is None:
         raise RuntimeError("Failed to create a valid device mesh.")
-    
+
     return device_mesh

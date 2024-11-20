@@ -30,17 +30,16 @@ def set_tokenizer_params(tokenizer: LlamaTokenizer):
 # with profile(cfg)과 동일한 기능
 @contextlib.contextmanager
 def profile(cfg, local_rank=None):
-    use_profile: bool = cfg.use_profiler
+    use_profiler: bool = cfg.use_profiler
     use_flop_counter: bool = cfg.flop_counter
-    if use_flop_counter and use_profile:
+    if use_flop_counter and use_profiler:
         raise ValueError("Cannot use both profiler and flop counter")
-    
-    if use_profile:
-        # profiler needs a warm stage to get the accurate profiling results
+    if use_profiler:
+        # profiler needs a warmup stage to get the accurate profiling results
         wait_step, warmup_step, active_step = 1, 2, 3
         min_step = wait_step + warmup_step + active_step + 1
         if cfg.max_train_step > 0 and cfg.max_train_step < min_step:
-            raise ValueError(f"pytorch profiler requires at least {min_step} train steps to finish the warm-up and recording stage, {wait_step} for wait_step, {warmup_step} for warmup_step, {active_step} for profiling step, please increase the max_train_step, current max_train_step{cfg.max_train_step}")
+            raise ValueError(f"pytorch profiler requires at least {min_step} train steps to finish the warm-up and recording stage, {wait_step} for wait_step, {warmup_step} for warmup_step, {active_step} for profiling step, please increase the max_train_step, current max_train_step {cfg.max_train_step}")
         print(f"pytorch profiling is activated and results will be saved in {cfg.profiler_dir}")
         with torch.profiler.profile(
             activities=[
@@ -54,21 +53,20 @@ def profile(cfg, local_rank=None):
             profile_memory=True,
             with_stack=False,
             with_flops=True,
-            record_shapes=True
+            record_shapes=True,
         ) as torch_profiler:
-            # context manager와 함께 활용 할 시 yield를 통해 with 블로에 필요한 자원을 제공함
             yield torch_profiler
     elif use_flop_counter:
         if cfg.max_train_step > 0 and cfg.max_train_step <= cfg.flop_counter_start:
             raise ValueError(f"flop counter requires at least {cfg.flop_counter_start + 1} train steps, please increase the max_train_step, current max_train_step {cfg.max_train_step}")
-        with FlopMeasure(rank=local_rank, warmup_step=cfg.flop_counter_start) as flop_counter:
+        with FlopMeasure(rank=local_rank,warmup_step=cfg.flop_counter_start) as flop_counter:
             yield flop_counter
     else:
         torch_profiler = contextlib.nullcontext()
         yield None
-        
-        
-def train(model, train_dataloader, eval_dataloader, tokenizer, optimizer, lr_scheduler, gradient_accumulation_steps, train_config, fsdp_config=None, local_rank=None, rank=None, wandb_run=None):
+
+
+def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_scheduler, gradient_accumulation_steps, train_config, fsdp_config=None, local_rank=None, rank=None, wandb_run=None):
     """
     Trains the model on the given dataloader
 
@@ -90,19 +88,19 @@ def train(model, train_dataloader, eval_dataloader, tokenizer, optimizer, lr_sch
     if train_config.use_fp16 and train_config.enable_fsdp:
         scaler = ShardedGradScaler()
     elif train_config.use_fp16 and not train_config.enable_fsdp:
-        # scaler = torch.cuda.amp.GradScaler() 아래처럼 변경됨
+        # scaler = torch.cuda.amp.GradScaler()
         scaler = torch.amp.grad_scaler("cuda") # 오류나면 위로 변경 해 보자
     if train_config.enable_fsdp:
         world_size = int(os.environ["WORLD_SIZE"])
-        
-    # autocast = torch.cuda.amp.autocast if train_config.use_fp16 else nullcontext
-    autocast = torch.amp.grad_scaler("cuda") if train_config.use_fp16 else nullcontext # 오류나면 위로 변경 해 보자
-    
+
+
+
+    autocast = torch.cuda.amp.autocast if train_config.use_fp16 else nullcontext
     train_prep = []
     train_loss = []
     val_prep = []
-    val_loss = []
-    
+    val_loss =[]
+
     if train_config.save_metrics:
         if not os.path.exists(train_config.output_dir):
             os.makedirs(train_config.output_dir, exist_ok=True)
@@ -111,14 +109,14 @@ def train(model, train_dataloader, eval_dataloader, tokenizer, optimizer, lr_sch
         train_step_loss = []
         val_step_loss = []
         val_step_perplexity = []
-    
+
     epoch_times = []
     checkpoint_times = []
     results = {}
     best_val_loss = float("inf")
     total_train_steps = 0
-    max_steps_reached = False # Flag to indicate max training steps reached
-    # start the training loop
+    max_steps_reached = False  # Flag to indicate max training steps reached
+    # Start the training loop
     for epoch in range(train_config.num_epochs):
         print(f"Starting epoch {epoch}/{train_config.num_epochs}")
         print(f"train_config.max_train_step: {train_config.max_train_step}")
@@ -201,25 +199,25 @@ def train(model, train_dataloader, eval_dataloader, tokenizer, optimizer, lr_sch
                     if train_config.save_metrics:
                         save_to_json(metrics_filename, train_step_loss, train_loss, train_step_perplexity, train_prep, val_step_loss, val_loss, val_step_perplexity, val_prep)
                 pbar.close()
-        
+
         epoch_end_time = time.perf_counter()-epoch_start_time
         epoch_times.append(epoch_end_time)
         # Reducing total_loss across all devices if there's more than one CUDA device
         if is_xpu_available() and (torch.xpu.device_count() > 1 and train_config.enable_fsdp):
             dist.all_reduce(total_loss, op=dist.ReduceOp.SUM)
-        elif torch.cuda.device() > 1 and train_config.enable_fsdp:
+        elif torch.cuda.device_count() > 1 and train_config.enable_fsdp:
             dist.all_reduce(total_loss, op=dist.ReduceOp.SUM)
         train_epoch_loss = total_loss / len(train_dataloader)
         if train_config.enable_fsdp:
             train_epoch_loss = train_epoch_loss/world_size
         train_perplexity = torch.exp(train_epoch_loss)
-        
+
         train_prep.append(float(train_perplexity))
         train_loss.append(float(train_epoch_loss))
-        
-        if not train_config.enable_fsdp or rank == 0:
+
+        if not train_config.enable_fsdp or rank==0:
             memtrace.print_stats()
-            
+
         # Update the learning rate as needed
         lr_scheduler.step()
         should_save_model = train_config.save_model
@@ -229,7 +227,7 @@ def train(model, train_dataloader, eval_dataloader, tokenizer, optimizer, lr_sch
                 val_step_loss.extend(temp_val_loss)
                 val_step_perplexity.extend(temp_step_perplexity)
             should_save_model = train_config.save_model and eval_epoch_loss < best_val_loss
-
+        
         checkpoint_start_time = time.perf_counter()
         if should_save_model:
             if train_config.enable_fsdp:
@@ -280,8 +278,8 @@ def train(model, train_dataloader, eval_dataloader, tokenizer, optimizer, lr_sch
             if train_config.enable_fsdp:
                 dist.barrier()
         checkpoint_end_time = time.perf_counter() - checkpoint_start_time
-        checkpoint_times.append(checkpoint_end_time)     
-                    
+        checkpoint_times.append(checkpoint_end_time)
+
         if train_config.run_validation:
             if eval_epoch_loss < best_val_loss:
                 best_val_loss = eval_epoch_loss
@@ -327,16 +325,17 @@ def train(model, train_dataloader, eval_dataloader, tokenizer, optimizer, lr_sch
 
     return results
 
-def evaluation(model, train_config, eval_dataloader, local_rank, toeknizer, wandb_run):
-    """_summary_
+def evaluation(model,train_config, eval_dataloader, local_rank, tokenizer, wandb_run):
+    """
+    Evaluates the model on the given dataloader
 
     Args:
-        model (_type_): _description_
-        train_config (_type_): _description_
-        eval_dataloader (_type_): _description_
-        local_rank (_type_): _description_
-        toeknizer (_type_): _description_
-        wandb_run (_type_): _description_
+        model: The model to evaluate
+        eval_dataloader: The dataloader containing the evaluation data
+        local_rank: The rank of the current node in a distributed setting
+        tokenizer: The tokenizer used to decode predictions
+
+    Returns: eval_ppl, eval_epoch_loss
     """
     if train_config.enable_fsdp:
         world_size = int(os.environ["WORLD_SIZE"])
@@ -344,20 +343,19 @@ def evaluation(model, train_config, eval_dataloader, local_rank, toeknizer, wand
     eval_preds = []
     val_step_loss = []
     val_step_perplexity = []
-    eval_loss = 0.0 # Initialize evaluation loss
-    total_eval_steps = 0 
-    
+    eval_loss = 0.0  # Initialize evaluation loss
+    total_eval_steps = 0
     with MemoryTrace() as memtrace:
-        for step, batch in enumerate(tqdm(eval_dataloader, colour='green', desc='evaluation Eopch', dynamic_ncols=True)):
+        for step, batch in enumerate(tqdm(eval_dataloader,colour="green", desc="evaluating Epoch", dynamic_ncols=True)):
             total_eval_steps += 1
             # stop when the maximum number of eval steps is reached
             if train_config.max_eval_step > 0 and total_eval_steps > train_config.max_eval_step:
-                if not train_config.enable_fsdp or local_rank == 0:
+                if not train_config.enable_fsdp or local_rank==0:
                     print("max eval steps reached, stopping evaluation, total_eval_steps: ", total_eval_steps - 1)
                 break
             for key in batch.keys():
                 if train_config.enable_fsdp:
-                    batch[key] =  batch[key].to(local_rank)
+                    batch[key] = batch[key].to(local_rank)
                 else:
                     if is_xpu_available():
                         batch[key] = batch[key].to('xpu:0')
@@ -365,7 +363,7 @@ def evaluation(model, train_config, eval_dataloader, local_rank, toeknizer, wand
                         batch[key] = batch[key].to('cuda:0')
             # Ensure no gradients are computed for this scope to save memory
             with torch.no_grad():
-                # Forward pass and ocmpute loss
+                # Forward pass and compute loss
                 outputs = model(**batch)
                 loss = outputs.loss
                 if train_config.save_metrics:
@@ -373,13 +371,12 @@ def evaluation(model, train_config, eval_dataloader, local_rank, toeknizer, wand
                     val_step_perplexity.append(float(torch.exp(loss.detach().float())))
 
                 eval_loss += loss.detach().float()
-            
             # Decode predictions and add to evaluation predictions list
             preds = torch.argmax(outputs.logits, -1)
             eval_preds.extend(
-                toeknizer.batch_decode(preds.detach().cpu().numpy(), skip_special_tokens=True)
+                tokenizer.batch_decode(preds.detach().cpu().numpy(), skip_special_tokens=True)
             )
-    
+
     # If there's more than one CUDA device, reduce evaluation loss across all devices
     if is_xpu_available() and (torch.xpu.device_count() > 1 and train_config.enable_fsdp):
         dist.all_reduce(eval_loss, op=dist.ReduceOp.SUM)
@@ -395,7 +392,7 @@ def evaluation(model, train_config, eval_dataloader, local_rank, toeknizer, wand
     # Print evaluation metrics
     if train_config.enable_fsdp:
         if local_rank==0:
-            print(f"{eval_ppl=} {eval_epoch_loss=}")
+            print(f" {eval_ppl=} {eval_epoch_loss=}")
     else:
         print(f" {eval_ppl=} {eval_epoch_loss=}")
 
@@ -407,12 +404,18 @@ def evaluation(model, train_config, eval_dataloader, local_rank, toeknizer, wand
 
     return eval_ppl, eval_epoch_loss, val_step_loss, val_step_perplexity
 
-
 def freeze_transformer_layers(model, num_layer):
-    for i, layer in enumerate(model.model.layers):
-        if i < num_layer:
-            for param in layer.parameters():
-                param.requires_grad
+   for i, layer in enumerate(model.model.layers):
+            if i < num_layer:
+                for param in layer.parameters():
+                    param.requires_grad = False
+
+
+def check_frozen_layers_peft_model(model):
+     for i, layer in enumerate(model.base_model.model.model.layers):
+            for name, param in layer.named_parameters():
+                print(f"Layer {i}, parameter {name}: requires_grad = {param.requires_grad}")
+
 
 def setup():
     """Initialize the process group for distributed training"""
@@ -424,9 +427,7 @@ def setup():
 
 
 def setup_environ_flags(rank):
-    """
-    Set environment flags for debugging purposes
-    """       
+    """Set environment flags for debugging purposes"""
     os.environ["TORCH_SHOW_CPP_STACKTRACES"] = str(1)
     os.environ["NCCL_ASYNC_ERROR_HANDLING"] = str(1)
     # os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
@@ -436,9 +437,10 @@ def setup_environ_flags(rank):
     if rank == 0:
         print(f"--> Running with torch dist debug set to detail")
 
+
 def cleanup():
     """Clean up the process group after training"""
-    dist.destroy_process_group
+    dist.destroy_process_group()
 
 
 def clear_gpu_cache(rank=None):
@@ -474,6 +476,9 @@ def print_model_size(model, config, rank: int = 0) -> None:
         total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"\n--> {config.model_name} has {total_params / 1e6} Million params\n")
 
+
+
+
 def get_policies(cfg, rank):
     """Get the policies for mixed precision and fsdp wrapping"""
 
@@ -507,6 +512,45 @@ def get_policies(cfg, rank):
             print(f"bFloat16 support not present. Using FP32, and not mixed precision")
     wrapping_policy = get_llama_wrapper()
     return mixed_precision_policy, wrapping_policy
+
+def save_train_params(train_config, fsdp_config, rank):
+    """
+    This function saves the train_config and FSDP config into a train_params.yaml.
+    This will be used by converter script in the inference folder to fetch the HF model name or path.
+    It also would be hepful as a log for future references.
+    """
+    # Convert the train_config and fsdp_config objects to dictionaries,
+    # converting all values to strings to ensure they can be serialized into a YAML file
+    train_config_dict = {k: str(v) for k, v in vars(train_config).items() if not k.startswith('__')}
+    fsdp_config_dict = {k: str(v) for k, v in vars(fsdp_config).items() if not k.startswith('__')}
+    # Merge the two dictionaries into one
+    train_params_dict = {**train_config_dict, **fsdp_config_dict}
+    # Construct the folder name (follwoing FSDP checkpointing style) using properties of the train_config object
+    folder_name = (
+    train_config.dist_checkpoint_root_folder
+    + "/"
+    + train_config.dist_checkpoint_folder
+    + "-"
+    + train_config.model_name
+    )
+
+    save_dir = Path.cwd() / folder_name
+    # If the directory does not exist, create it
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    # Convert the dictionary to a YAML string
+    config_yaml = yaml.dump(train_params_dict, indent=4)
+    file_name = os.path.join(save_dir,'train_params.yaml')
+
+    # Check if there's a directory with the same name as the file
+    if os.path.isdir(file_name):
+        print(f"Error: {file_name} is a directory, not a file.")
+    else:
+        # Write the YAML string to the file
+        with open(file_name, 'w') as f:
+            f.write(config_yaml)
+        if rank==0:
+            print(f"training params are saved in {file_name}")
 
 def save_to_json(output_filename, train_step_loss, train_epoch_loss, train_step_ppl, train_epoch_ppl, val_step_loss, val_epoch_loss, val_step_ppl, val_epoch_ppl):
     metrics_data = {

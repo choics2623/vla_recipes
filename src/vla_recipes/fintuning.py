@@ -60,13 +60,13 @@ from transformers.models.mllama.modeling_mllama import(
     MllamaVisionEncoderLayer,
 )
 
-def setup_wandb(train_conifg, fsdp_config, **kwargs):
+def setup_wandb(train_config, fsdp_config, **kwargs):
     try:
         import wandb
     except ImportError:
         raise ImportError(
-            "you are trying to use wandv which is not currently installed."
-            "please install it using pip install wandb"
+            "You are trying to use wandb which is not currently installed. "
+            "Please install it using pip install wandb"
         )
     from vla_recipes.configs import wandb_config as WANDB_CONFIG
 
@@ -74,9 +74,10 @@ def setup_wandb(train_conifg, fsdp_config, **kwargs):
     update_config(wandb_config, **kwargs)
     init_dict = dataclasses.asdict(wandb_config)
     run = wandb.init(**init_dict)
-    run.config.update(train_conifg)
+    run.config.update(train_config)
     run.config.update(fsdp_config, allow_val_change=True)
     return run
+
 
 def main(**kwargs):
     # Update the configuration for the training and sharding process
@@ -95,7 +96,7 @@ def main(**kwargs):
         local_rank = int(os.environ["LOCAL_RANK"])
         rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
-    
+
     if torch.distributed.is_initialized():
         if is_xpu_available():
             torch.xpu.set_device(local_rank)
@@ -108,16 +109,14 @@ def main(**kwargs):
 
     if train_config.use_wandb:
         if not train_config.enable_fsdp or rank == 0:
-            wandb_run = setup_wandb(train_config, fsdp_config, ** kwargs)
-    
+            wandb_run = setup_wandb(train_config, fsdp_config, **kwargs)
 
     # setting quantization configs
     bnb_config = None
     if train_config.quantization:
         if type(train_config.quantization) == type(True):
             warn(
-                "Quantization (--quantization) is a boolean, please specify quantization as '4bit' or '8bit'.",
-                "Defaulting to '8bit' but this might change in the future",
+                "Quantization (--quantization) is a boolean, please specify quantization as '4bit' or '8bit'. Defaulting to '8bit' but this might change in the future.",
                 FutureWarning,
             )
             train_config.quantization = "8bit"
@@ -126,7 +125,7 @@ def main(**kwargs):
             raise ValueError(
                 "8bit quantization is not supported with FSDP, please use 4bit quantization"
             )
-        
+
         quant_config = QUANTIZATION_CONFIG()
         update_config(quant_config, **kwargs)
         bnb_config = quant_config.create_bnb_config(train_config.quantization)
@@ -145,7 +144,7 @@ def main(**kwargs):
                 if train_config.quantization and not train_config.enable_fsdp
                 else None
             ),
-            torch_dtype = torch.float16 if train_config.use_fp16 else torch.bfloat16,
+            torch_dtype=torch.float16 if train_config.use_fp16 else torch.bfloat16,
         )
         processor = AutoProcessor.from_pretrained(
             train_config.model_name
@@ -173,14 +172,12 @@ def main(**kwargs):
         raise ValueError(
             f"Model type {config.model_type} is not supported. Please use llama or mllama model."
         )
-
     # Load the tokenizer and add special tokens
     tokenizer = AutoTokenizer.from_pretrained(
         train_config.model_name
         if train_config.tokenizer_name is None
         else train_config.tokenizer_name
     )
-
     if not tokenizer.pad_token_id:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
@@ -191,7 +188,7 @@ def main(**kwargs):
             "WARNING: Resizing the embedding matrix to match the tokenizer vocab size."
         )
         model.resize_token_embeddings(len(tokenizer))
-    
+
     print_model_size(model, train_config, rank if train_config.enable_fsdp else 0)
 
     # Convert the model to bfloat16 if fsdp and pure_bf16 is enabled
@@ -205,7 +202,9 @@ def main(**kwargs):
     if train_config.use_peft:
         # Load the pre-trained peft model checkpoint and setup its configuration
         if train_config.from_peft_checkpoint:
-            model = PeftModel.from_pretrained(model, train_config.from_peft_checkpoint, is_trainable=True)
+            model = PeftModel.from_pretrained(
+                model, train_config.from_peft_checkpoint, is_trainable=True
+            )
             peft_config = model.peft_config
         # Generate the peft config and start fine-tuning from original model
         else:
@@ -222,17 +221,17 @@ def main(**kwargs):
     ):
         hsdp_device_mesh_plan = hsdp_device_mesh(
             replica_group_size=fsdp_config.replica_group_size,
-            sharding_group_size=fsdp_config.sharding_group_size
+            sharding_group_size=fsdp_config.sharding_group_size,
         )
         print("HSDP device mesh is ready")
-    
+
     # setting up FSDP if enable_fsdp is enabled
     if train_config.enable_fsdp:
         check_fsdp_config(fsdp_config)
 
         if not train_config.use_peft and train_config.freeze_layers:
             freeze_transformer_layers(model, train_config.num_freeze_layers)
-        
+
         mixed_precision_policy, wrapping_policy = get_policies(fsdp_config, rank)
         # Create the FSDP wrapper for MllamaSelfAttentionDecoderLayer,MllamaSelfAttentionDecoderLayer,MllamaVisionEncoderLayer in vision models
         if is_vision:
@@ -240,7 +239,7 @@ def main(**kwargs):
                 model,
                 [
                     MllamaSelfAttentionDecoderLayer,
-                    MllamaCrossAttentionDecoderLayer, # 이곳 원본 코드에서는 MllamaSelfAttentionDecoderLayer모듈 두 개를 지정하던데 이게 맞겠지? 추후 확인 필요
+                    MllamaSelfAttentionDecoderLayer,
                     MllamaVisionEncoderLayer,
                 ],
             )
@@ -276,7 +275,6 @@ def main(**kwargs):
                         device=torch.device("cuda"), recurse=False
                     )
                 )
-                # 파라미터와 버퍼를 지정된 장치로 이동시키되, 저장소(Storage)를 복사하지 않음.
                 if train_config.low_cpu_fsdp and rank != 0
                 else None
             ),
@@ -295,20 +293,21 @@ def main(**kwargs):
         dataset_processer = processor
     else:
         dataset_processer = tokenizer
-    
+
     # Load and preprocess the dataset for training and validation
+
     dataset_train = get_preprocessed_dataset(
         dataset_processer,
         dataset_config,
-        split="train"
+        split="train",
     )
     if not train_config.enable_fsdp or rank == 0:
         print(f"--> Training Set Length = {len(dataset_train)}")
-    
+
     dataset_val = get_preprocessed_dataset(
         dataset_processer,
         dataset_config,
-        split="test"
+        split="test",
     )
     if not train_config.enable_fsdp or rank == 0:
         print(f"--> Validation Set Length = {len(dataset_val)}")
@@ -320,7 +319,7 @@ def main(**kwargs):
             dataset_train = ConcatDataset(
                 dataset_train, chunk_size=train_config.context_length
             )
-    
+
     train_dl_kwargs = get_dataloader_kwargs(
         train_config, dataset_train, dataset_processer, "train"
     )
@@ -347,12 +346,13 @@ def main(**kwargs):
                 dataset_val = ConcatDataset(
                     dataset_val, chunk_size=train_config.context_length
                 )
+
         val_dl_kwargs = get_dataloader_kwargs(
             train_config, dataset_val, dataset_processer, "val"
         )
         if custom_data_collator:
             val_dl_kwargs["collate_fn"] = custom_data_collator
-        
+
         eval_dataloader = torch.utils.data.DataLoader(
             dataset_val,
             num_workers=train_config.num_workers_dataloader,
@@ -362,47 +362,48 @@ def main(**kwargs):
         print(f"--> Num of Validation Set Batches loaded = {len(eval_dataloader)}")
         if len(eval_dataloader) == 0:
             raise ValueError(
-                f"The eval set size is too small for dataloader to load even on batch. Please increase the size of eval set. ({len(eval_dataloader)=})"
+                f"The eval set size is too small for dataloader to load even one batch. Please increase the size of eval set. ({len(eval_dataloader)=})"
             )
         else:
             print(f"--> Num of Validation Set Batches loaded = {len(eval_dataloader)}")
-        
-        # Initializa the optimizer and learning rate schedular
-        if fsdp_config.pure_bf16 and fsdp_config.optimizer == "anyprecision":
-            optimizer = AnyPrecisionAdamW(
-                model.parameters(),
-                lr=train_config.lr,
-                momentum_dtype=torch.bfloat16,
-                variance_dtype=torch.bfloat16,
-                use_kahan_summation=False,
-                weight_decay=train_config.weight_decay,
-            )
-        else:
-            optimizer = optim.AdamW(
-                model.parameters(),
-                lr=train_config.lr,
-                weight_decay=train_config.weight_decay
-            )
-        scheduler = StepLR(optimizer, step_size=1, gamma=train_config.gamma)
-        results = train(
-            model,
-            train_dataloader,
-            eval_dataloader,
-            tokenizer,
-            optimizer,
-            scheduler,
-            train_config.gradient_accumulation_steps,
-            train_config,
-            fsdp_config if train_config.enable_fsdp else None,
-            local_rank if train_config.enable_fsdp else None,
-            rank if train_config.enable_fsdp else None,
-            wandb_run,
+
+    # Initialize the optimizer and learning rate scheduler
+    if fsdp_config.pure_bf16 and fsdp_config.optimizer == "anyprecision":
+        optimizer = AnyPrecisionAdamW(
+            model.parameters(),
+            lr=train_config.lr,
+            momentum_dtype=torch.bfloat16,
+            variance_dtype=torch.bfloat16,
+            use_kahan_summation=False,
+            weight_decay=train_config.weight_decay,
         )
-        if not train_config.enable_fsdp or rank == 0:
-            [print(f"Key: {k}, Value: {v}") for k, v in results.items()]
-            if train_config.use_wandb:
-                for k, v in results.items():
-                    wandb_run.summary[k] = v
+    else:
+        optimizer = optim.AdamW(
+            model.parameters(),
+            lr=train_config.lr,
+            weight_decay=train_config.weight_decay,
+        )
+    scheduler = StepLR(optimizer, step_size=1, gamma=train_config.gamma)
+    results = train(
+        model,
+        train_dataloader,
+        eval_dataloader,
+        tokenizer,
+        optimizer,
+        scheduler,
+        train_config.gradient_accumulation_steps,
+        train_config,
+        fsdp_config if train_config.enable_fsdp else None,
+        local_rank if train_config.enable_fsdp else None,
+        rank if train_config.enable_fsdp else None,
+        wandb_run,
+    )
+    if not train_config.enable_fsdp or rank == 0:
+        [print(f"Key: {k}, Value: {v}") for k, v in results.items()]
+        if train_config.use_wandb:
+            for k, v in results.items():
+                wandb_run.summary[k] = v
+
 
 if __name__ == "__main__":
     fire.Fire(main)
