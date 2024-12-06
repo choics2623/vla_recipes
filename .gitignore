@@ -55,3 +55,8 @@ db.sqlite3
 
 # Other
 *.swp
+
+# Folders
+openvla/
+playground/
+outputs/
