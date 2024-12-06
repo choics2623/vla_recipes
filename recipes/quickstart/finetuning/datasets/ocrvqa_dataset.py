@@ -55,7 +55,7 @@ def get_custom_dataset(dataset_conifg, processor, split, split_ratio=0.9):
     dataset_dict = load_dataset("HuggingFaceM4/the_cauldron", name="ocrvqa")
     dataset = dataset_dict['train']
     # Comment out the following line to use the full dataset, for quick testing only use 2000 samples
-    dataset = dataset.select(range(2000))
+    dataset = dataset.select(range(20))
     dataset = dataset.train_test_split(test_size=1-split_ratio, shuffle=True, seed=42)[split]
     return dataset
 
