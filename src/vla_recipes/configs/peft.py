@@ -5,7 +5,7 @@ from typing import List
 class lora_config:
     r: int=8
     lora_alpha: int=32
-    target_modules: List[str] = field(default_factory=lambda: ["q_proj", "v_proj"])
+    target_modules: List[str] = field(default_factory=lambda: ["v_proj","o_proj","q_proj","down_proj","gate_proj","k_proj","up_proj"])
     bias= "none"
     task_type: str= "CAUSAL_LM"
     lora_dropout: float=0.05

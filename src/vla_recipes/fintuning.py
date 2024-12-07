@@ -238,7 +238,7 @@ def main(**kwargs):
             my_auto_wrapping_policy = fsdp_auto_wrap_policy(
                 model,
                 [
-                    MllamaSelfAttentionDecoderLayer,
+                    MllamaCrossAttentionDecoderLayer,
                     MllamaSelfAttentionDecoderLayer,
                     MllamaVisionEncoderLayer,
                 ],
